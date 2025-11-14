@@ -281,6 +281,7 @@ For issues, questions, or suggestions:
 
 ---
 
-**Built with ❤️ using Dash 🌤️**
+**Built using Dash 🌤️**
+
 
 *Last updated: November 2024*
