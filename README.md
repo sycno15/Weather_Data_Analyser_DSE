@@ -1,6 +1,6 @@
 # 🌤️ Weather Data Analyzer
 
-A Streamlit-based web application for analyzing and visualizing weather data with interactive charts, statistics, and insights.
+A dash-based web application for analyzing and visualizing weather data with interactive charts, statistics, and insights mmade for DSE project.
 
 ## 🚀 How to Run
 
@@ -17,11 +17,11 @@ pip install -r requirements.txt
 
 3. **Run the application:**
 ```bash
-streamlit run app.py
+python app.py
 ```
 
 4. **Open your browser:**
-The app will automatically open at `http://localhost:8501`
+The app will automatically open at `http://localhost:8050`
 
 ## 📊 Features
 

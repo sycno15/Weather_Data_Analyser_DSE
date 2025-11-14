@@ -1,431 +1,557 @@
-import streamlit as st
+import dash
+from dash import dcc, html, dash_table, Input, Output, State
+import plotly.graph_objs as go
+import plotly.express as px
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 from weather import WeatherDataAnalyzer
 from datetime import datetime
+import base64
+import io
 
-# Page configuration
-st.set_page_config(
-    page_title="Weather Data Analyzer",
-    page_icon="🌤️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Initialize the app
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
+app.title = "Weather Data Analyzer"
 
-# Custom CSS
-st.markdown("""
-    <style>
-    .main {
-        padding: 0rem 1rem;
-    }
-    .stMetric {
-        background-color: #f0f2f6;
-        padding: 15px;
-        border-radius: 10px;
-    }
-    h1 {
-        color: #667eea;
-        text-align: center;
-    }
-    .stat-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        margin: 10px 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+# Initialize analyzer
+analyzer = WeatherDataAnalyzer()
 
-# Initialize session state
-if 'analyzer' not in st.session_state:
-    st.session_state.analyzer = WeatherDataAnalyzer()
-    st.session_state.data_loaded = False
-
-# Title
-st.title("🌤️ Weather Data Analyzer")
-st.markdown("---")
-
-# Sidebar
-with st.sidebar:
-    st.header("📊 Data Source")
+# App layout
+app.layout = html.Div([
+    # Header
+    html.Div([
+        html.H1("🌤️ Weather Data Analyzer", 
+                style={'textAlign': 'center', 'color': '#667eea', 'marginBottom': '10px'}),
+        html.Hr()
+    ]),
     
-    data_option = st.radio(
-        "Choose data source:",
-        ["Upload CSV File", "Get Data"]
+    # Main container
+    html.Div([
+        # Sidebar
+        html.Div([
+            html.H3("📊 Data Source", style={'color': '#667eea'}),
+            
+            dcc.RadioItems(
+                id='data-source',
+                options=[
+                    {'label': 'Upload CSV File', 'value': 'upload'},
+                    {'label': 'Get Real Data', 'value': 'fetch'}
+                ],
+                value='upload',
+                style={'marginBottom': '20px'}
+            ),
+            
+            # Upload section
+            html.Div(id='upload-section', children=[
+                dcc.Upload(
+                    id='upload-data',
+                    children=html.Div([
+                        '📁 Drag and Drop or ',
+                        html.A('Select CSV File')
+                    ]),
+                    style={
+                        'width': '100%',
+                        'height': '60px',
+                        'lineHeight': '60px',
+                        'borderWidth': '2px',
+                        'borderStyle': 'dashed',
+                        'borderRadius': '10px',
+                        'textAlign': 'center',
+                        'margin': '10px 0',
+                        'backgroundColor': '#f8f9ff',
+                        'cursor': 'pointer'
+                    }
+                ),
+            ]),
+            
+            # Fetch section
+            html.Div(id='fetch-section', style={'display': 'none'}, children=[
+                html.Label("Number of days:"),
+                dcc.Slider(
+                    id='days-slider',
+                    min=30,
+                    max=365,
+                    value=365,
+                    marks={30: '30', 90: '90', 180: '180', 365: '365'},
+                    tooltip={"placement": "bottom", "always_visible": True}
+                ),
+                html.Br(),
+                html.Label("Select a city:"),
+                dcc.Dropdown(
+                    id='city-dropdown',
+                    options=[
+                        {'label': city, 'value': city} 
+                        for city in ["Nagpur", "New Delhi", "Mumbai", "Chennai", 
+                                   "Bengaluru", "Kolkata", "Hyderabad"]
+                    ],
+                    value='Nagpur'
+                ),
+                html.Br(),
+                html.Button('Get Data', id='fetch-btn', n_clicks=0,
+                           style={'width': '100%', 'padding': '10px', 'backgroundColor': '#667eea',
+                                 'color': 'white', 'border': 'none', 'borderRadius': '8px',
+                                 'cursor': 'pointer', 'fontSize': '16px', 'fontWeight': 'bold'})
+            ]),
+            
+            html.Hr(),
+            
+            # Quick Info
+            html.Div(id='quick-info', children=[
+                html.H4("📋 Quick Info", style={'color': '#667eea'}),
+                html.Div(id='info-content')
+            ])
+            
+        ], style={'width': '25%', 'padding': '20px', 'backgroundColor': '#f9f9f9', 
+                 'borderRadius': '10px', 'marginRight': '20px'}),
+        
+        # Main content
+        html.Div([
+            dcc.Store(id='stored-data'),
+            html.Div(id='status-message'),
+            
+            dcc.Tabs(id='tabs', value='statistics', children=[
+                dcc.Tab(label='📊 Statistics', value='statistics'),
+                dcc.Tab(label='📈 Visualizations', value='visualizations'),
+                dcc.Tab(label='🌡️ Extremes', value='extremes'),
+                dcc.Tab(label='📋 Data View', value='dataview'),
+                dcc.Tab(label='🔍 Insights', value='insights'),
+            ]),
+            
+            html.Div(id='tab-content', style={'padding': '20px'})
+            
+        ], style={'width': '75%'})
+        
+    ], style={'display': 'flex', 'padding': '20px'}),
+    
+    # Footer
+    html.Hr(),
+    html.P("Weather Data Analyzer | Built with Dash 🌤️",
+           style={'textAlign': 'center', 'color': '#666'})
+])
+
+
+# Callbacks
+@app.callback(
+    [Output('upload-section', 'style'),
+     Output('fetch-section', 'style')],
+    Input('data-source', 'value')
+)
+def toggle_data_source(value):
+    if value == 'upload':
+        return {'display': 'block'}, {'display': 'none'}
+    else:
+        return {'display': 'none'}, {'display': 'block'}
+
+
+@app.callback(
+    [Output('stored-data', 'data'),
+     Output('status-message', 'children')],
+    [Input('upload-data', 'contents'),
+     Input('fetch-btn', 'n_clicks')],
+    [State('upload-data', 'filename'),
+     State('city-dropdown', 'value'),
+     State('days-slider', 'value')]
+)
+def load_data(contents, n_clicks, filename, city, days):
+    ctx = dash.callback_context
+    
+    if not ctx.triggered:
+        return None, html.Div()
+    
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    try:
+        if trigger_id == 'upload-data' and contents:
+            content_type, content_string = contents.split(',')
+            decoded = base64.b64decode(content_string)
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+            df['date'] = pd.to_datetime(df['date'])
+            
+            message = html.Div(f"✅ File loaded! {len(df)} rows", 
+                             style={'padding': '10px', 'backgroundColor': '#d4edda', 
+                                   'color': '#155724', 'borderRadius': '5px', 'margin': '10px 0'})
+            return df.to_json(date_format='iso', orient='split'), message
+            
+        elif trigger_id == 'fetch-btn' and n_clicks > 0:
+            analyzer.fetch_real_data(city=city, days=days)
+            df = analyzer.df
+            
+            message = html.Div(f"✅ Data fetched for {days} days in {city}!", 
+                             style={'padding': '10px', 'backgroundColor': '#d4edda', 
+                                   'color': '#155724', 'borderRadius': '5px', 'margin': '10px 0'})
+            return df.to_json(date_format='iso', orient='split'), message
+            
+    except Exception as e:
+        message = html.Div(f"❌ Error: {str(e)}", 
+                         style={'padding': '10px', 'backgroundColor': '#f8d7da', 
+                               'color': '#721c24', 'borderRadius': '5px', 'margin': '10px 0'})
+        return None, message
+    
+    return None, html.Div()
+
+
+@app.callback(
+    Output('info-content', 'children'),
+    Input('stored-data', 'data')
+)
+def update_quick_info(data):
+    if data is None:
+        return html.Div()
+    
+    df = pd.read_json(data, orient='split')
+    df['date'] = pd.to_datetime(df['date'])
+    
+    return html.Div([
+        html.P(f"Total Records: {len(df)}", style={'fontSize': '14px', 'fontWeight': 'bold'}),
+        html.P(f"Columns: {len(df.columns)}", style={'fontSize': '14px', 'fontWeight': 'bold'}),
+        html.P(f"Date Range: {df['date'].min().date()} to {df['date'].max().date()}", 
+               style={'fontSize': '12px'})
+    ])
+
+
+@app.callback(
+    Output('tab-content', 'children'),
+    [Input('tabs', 'value'),
+     Input('stored-data', 'data')]
+)
+def render_tab_content(active_tab, data):
+    if data is None:
+        return html.Div([
+            html.P("👈 Please upload a CSV file or fetch data from the sidebar to begin analysis",
+                   style={'padding': '20px', 'backgroundColor': '#d1ecf1', 'borderRadius': '5px'}),
+            html.H4("Expected CSV Format:"),
+            dash_table.DataTable(
+                data=[
+                    {'date': '2024-01-01', 'temperature': 25.5, 'precipitation': 0, 'wind_speed': 15, 'pressure': 1013},
+                    {'date': '2024-01-02', 'temperature': 26.3, 'precipitation': 2.5, 'wind_speed': 18, 'pressure': 1015},
+                    {'date': '2024-01-03', 'temperature': 24.8, 'precipitation': 1.2, 'wind_speed': 12, 'pressure': 1012}
+                ],
+                columns=[{'name': i, 'id': i} for i in ['date', 'temperature', 'precipitation', 'wind_speed', 'pressure']],
+                style_table={'overflowX': 'auto'}
+            )
+        ])
+    
+    df = pd.read_json(data, orient='split')
+    df['date'] = pd.to_datetime(df['date'])
+    
+    if active_tab == 'statistics':
+        return render_statistics(df)
+    elif active_tab == 'visualizations':
+        return render_visualizations(df)
+    elif active_tab == 'extremes':
+        return render_extremes(df)
+    elif active_tab == 'dataview':
+        return render_dataview(df)
+    elif active_tab == 'insights':
+        return render_insights(df)
+
+
+def render_statistics(df):
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    
+    children = [html.H3("Summary Statistics")]
+    
+    for col in numeric_cols:
+        stats = html.Div([
+            html.H4(col.upper(), style={'color': '#667eea'}),
+            html.Div([
+                html.Div([
+                    html.P("Mean", style={'fontWeight': 'bold'}),
+                    html.P(f"{df[col].mean():.2f}")
+                ], style={'display': 'inline-block', 'margin': '10px', 'padding': '10px', 
+                         'backgroundColor': '#f0f2f6', 'borderRadius': '5px'}),
+                
+                html.Div([
+                    html.P("Median", style={'fontWeight': 'bold'}),
+                    html.P(f"{df[col].median():.2f}")
+                ], style={'display': 'inline-block', 'margin': '10px', 'padding': '10px', 
+                         'backgroundColor': '#f0f2f6', 'borderRadius': '5px'}),
+                
+                html.Div([
+                    html.P("Std Dev", style={'fontWeight': 'bold'}),
+                    html.P(f"{df[col].std():.2f}")
+                ], style={'display': 'inline-block', 'margin': '10px', 'padding': '10px', 
+                         'backgroundColor': '#f0f2f6', 'borderRadius': '5px'}),
+                
+                html.Div([
+                    html.P("Min", style={'fontWeight': 'bold'}),
+                    html.P(f"{df[col].min():.2f}")
+                ], style={'display': 'inline-block', 'margin': '10px', 'padding': '10px', 
+                         'backgroundColor': '#f0f2f6', 'borderRadius': '5px'}),
+                
+                html.Div([
+                    html.P("Max", style={'fontWeight': 'bold'}),
+                    html.P(f"{df[col].max():.2f}")
+                ], style={'display': 'inline-block', 'margin': '10px', 'padding': '10px', 
+                         'backgroundColor': '#f0f2f6', 'borderRadius': '5px'}),
+            ])
+        ], style={'marginBottom': '30px'})
+        
+        children.append(stats)
+    
+    return html.Div(children)
+
+
+def render_visualizations(df):
+    return html.Div([
+        html.H3("Data Visualizations"),
+        
+        dcc.Dropdown(
+            id='viz-selector',
+            options=[
+                {'label': 'Temperature Trend', 'value': 'temp_trend'},
+                {'label': 'Monthly Averages', 'value': 'monthly'},
+                {'label': 'All Variables', 'value': 'all_vars'},
+                {'label': 'Distribution Plots', 'value': 'distribution'}
+            ],
+            value='temp_trend',
+            style={'width': '50%', 'marginBottom': '20px'}
+        ),
+        
+        html.Div(id='viz-content')
+    ])
+
+
+@app.callback(
+    Output('viz-content', 'children'),
+    [Input('viz-selector', 'value'),
+     Input('stored-data', 'data')]
+)
+def update_visualization(viz_type, data):
+    if data is None:
+        return html.Div()
+    
+    df = pd.read_json(data, orient='split')
+    df['date'] = pd.to_datetime(df['date'])
+    
+    if viz_type == 'temp_trend' and 'temperature' in df.columns:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df['date'], y=df['temperature'], 
+                                mode='lines', name='Temperature',
+                                line=dict(color='#e74c3c', width=2)))
+        fig.update_layout(title='Temperature Trend Over Time',
+                         xaxis_title='Date', yaxis_title='Temperature (°C)',
+                         height=500)
+        return dcc.Graph(figure=fig)
+    
+    elif viz_type == 'monthly' and 'temperature' in df.columns:
+        df_copy = df.copy()
+        df_copy['month'] = pd.to_datetime(df_copy['date']).dt.month
+        monthly_avg = df_copy.groupby('month')['temperature'].mean().reset_index()
+        
+        month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        monthly_avg['month_name'] = monthly_avg['month'].apply(lambda x: month_labels[x-1])
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=monthly_avg['month_name'], y=monthly_avg['temperature'],
+                            marker_color='skyblue'))
+        fig.update_layout(title='Monthly Average Temperature',
+                         xaxis_title='Month', yaxis_title='Average Temperature (°C)',
+                         height=500)
+        return dcc.Graph(figure=fig)
+    
+    elif viz_type == 'all_vars':
+        numeric_cols = [col for col in df.columns if col != 'date' and pd.api.types.is_numeric_dtype(df[col])]
+        
+        if not numeric_cols:
+            return html.P("No numeric columns found")
+        
+        fig = go.Figure()
+        for col in numeric_cols:
+            fig.add_trace(go.Scatter(x=df['date'], y=df[col], 
+                                    mode='lines', name=col.title()))
+        
+        fig.update_layout(title='All Weather Variables',
+                         xaxis_title='Date', yaxis_title='Value',
+                         height=600)
+        return dcc.Graph(figure=fig)
+    
+    elif viz_type == 'distribution':
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        
+        return html.Div([
+            dcc.Dropdown(
+                id='dist-var-selector',
+                options=[{'label': col, 'value': col} for col in numeric_cols],
+                value=numeric_cols[0] if numeric_cols else None,
+                style={'width': '50%', 'marginBottom': '20px'}
+            ),
+            html.Div(id='dist-plots')
+        ])
+    
+    return html.Div()
+
+
+@app.callback(
+    Output('dist-plots', 'children'),
+    [Input('dist-var-selector', 'value'),
+     Input('stored-data', 'data')]
+)
+def update_distribution(selected_var, data):
+    if data is None or selected_var is None:
+        return html.Div()
+    
+    df = pd.read_json(data, orient='split')
+    
+    fig1 = go.Figure()
+    fig1.add_trace(go.Histogram(x=df[selected_var], nbinsx=30,
+                               marker_color='skyblue'))
+    fig1.update_layout(title=f'Distribution of {selected_var.title()}',
+                      xaxis_title=selected_var.title(), yaxis_title='Frequency',
+                      height=400)
+    
+    fig2 = go.Figure()
+    fig2.add_trace(go.Box(y=df[selected_var], name=selected_var.title()))
+    fig2.update_layout(title=f'Box Plot of {selected_var.title()}',
+                      yaxis_title=selected_var.title(),
+                      height=400)
+    
+    return html.Div([
+        html.Div(dcc.Graph(figure=fig1), style={'display': 'inline-block', 'width': '48%'}),
+        html.Div(dcc.Graph(figure=fig2), style={'display': 'inline-block', 'width': '48%', 'marginLeft': '4%'})
+    ])
+
+
+def render_extremes(df):
+    children = [html.H3("🌡️ Extreme Weather Days")]
+    
+    col1_children = []
+    col2_children = []
+    
+    if 'temperature' in df.columns:
+        hottest = df.loc[df['temperature'].idxmax()]
+        coldest = df.loc[df['temperature'].idxmin()]
+        
+        col1_children.extend([
+            html.Div([
+                html.H4("🔥 Hottest Day", style={'color': 'white'}),
+                html.P(f"Date: {hottest['date'].date()}"),
+                html.P(f"Temperature: {hottest['temperature']:.2f}°C")
+            ], style={'background': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                     'padding': '20px', 'borderRadius': '10px', 'color': 'white', 'margin': '10px'}),
+            
+            html.Div([
+                html.H4("❄️ Coldest Day", style={'color': 'white'}),
+                html.P(f"Date: {coldest['date'].date()}"),
+                html.P(f"Temperature: {coldest['temperature']:.2f}°C")
+            ], style={'background': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                     'padding': '20px', 'borderRadius': '10px', 'color': 'white', 'margin': '10px'})
+        ])
+    
+    if 'precipitation' in df.columns:
+        wettest = df.loc[df['precipitation'].idxmax()]
+        
+        col2_children.append(
+            html.Div([
+                html.H4("💧 Wettest Day", style={'color': 'white'}),
+                html.P(f"Date: {wettest['date'].date()}"),
+                html.P(f"Precipitation: {wettest['precipitation']:.2f} mm")
+            ], style={'background': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                     'padding': '20px', 'borderRadius': '10px', 'color': 'white', 'margin': '10px'})
+        )
+    
+    if 'wind_speed' in df.columns:
+        windiest = df.loc[df['wind_speed'].idxmax()]
+        
+        col2_children.append(
+            html.Div([
+                html.H4("💨 Windiest Day", style={'color': 'white'}),
+                html.P(f"Date: {windiest['date'].date()}"),
+                html.P(f"Wind Speed: {windiest['wind_speed']:.2f} km/h")
+            ], style={'background': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                     'padding': '20px', 'borderRadius': '10px', 'color': 'white', 'margin': '10px'})
+        )
+    
+    children.append(
+        html.Div([
+            html.Div(col1_children, style={'display': 'inline-block', 'width': '48%', 'verticalAlign': 'top'}),
+            html.Div(col2_children, style={'display': 'inline-block', 'width': '48%', 'marginLeft': '4%', 'verticalAlign': 'top'})
+        ])
     )
     
-    if data_option == "Upload CSV File":
-        uploaded_file = st.file_uploader("Upload your weather CSV file", type=['csv'])
+    return html.Div(children)
+
+
+def render_dataview(df):
+    return html.Div([
+        html.H3("📋 Raw Data View"),
         
-        if uploaded_file is not None:
-            try:
-                st.session_state.analyzer.df = pd.read_csv(uploaded_file)
-                st.session_state.analyzer.df['date'] = pd.to_datetime(
-                    st.session_state.analyzer.df['date']
-                )
-                st.session_state.data_loaded = True
-                st.success(f"✅ File loaded! {len(st.session_state.analyzer.df)} rows")
-            except Exception as e:
-                st.error(f"Error loading file: {str(e)}")
-    
-    else:
-        days = st.slider("Number of days", min_value=30, max_value=365, value=365)
-        city = st.selectbox("Select a city:", ["Nagpur", "New Delhi", "Mumbai", "Chennai", "Bengaluru", "Kolkata", "Hyderabad"])
-
-        if st.button("Get Data", type="primary"):
-            st.session_state.analyzer.fetch_real_data(city=city, days=days)
-            st.session_state.data_loaded = True
-            st.success(f"✅ Data fetched for {days} days in {city}!")
-
-    
-    st.markdown("---")
-    
-    if st.session_state.data_loaded:
-        st.header("📋 Quick Info")
-        st.metric("Total Records", len(st.session_state.analyzer.df))
-        st.metric("Columns", len(st.session_state.analyzer.df.columns))
+        dash_table.DataTable(
+            data=df.head(50).to_dict('records'),
+            columns=[{'name': i, 'id': i} for i in df.columns],
+            style_table={'overflowX': 'auto'},
+            style_cell={'textAlign': 'left', 'padding': '10px'},
+            style_header={'backgroundColor': '#667eea', 'color': 'white', 'fontWeight': 'bold'},
+            page_size=20
+        ),
         
-        if 'date' in st.session_state.analyzer.df.columns:
-            date_range = st.session_state.analyzer.df['date']
-            st.metric(
-                "Date Range", 
-                f"{date_range.min().date()} to {date_range.max().date()}"
-            )
-
-# Main content
-if not st.session_state.data_loaded:
-    st.info("👈 Please upload a CSV file or generate sample data from the sidebar to begin analysis")
-    
-    # Show sample CSV format
-    st.subheader("Expected CSV Format:")
-    sample_df = pd.DataFrame({
-        'date': ['2024-01-01', '2024-01-02', '2024-01-03'],
-        'temperature': [25.5, 26.3, 24.8],
-        'precipitation': [0, 2.5, 1.2],
-        'wind_speed': [15, 18, 12],
-        'pressure': [1013, 1015, 1012]
-    })
-    st.dataframe(sample_df, use_container_width=True)
-
-else:
-    # Tabs for different sections
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Statistics", 
-        "📈 Visualizations", 
-        "🌡️ Extremes", 
-        "📋 Data View",
-        "🔍 Insights"
+        html.Br(),
+        html.Button('📥 Download CSV', id='download-btn', n_clicks=0,
+                   style={'padding': '10px 20px', 'backgroundColor': '#667eea',
+                         'color': 'white', 'border': 'none', 'borderRadius': '5px',
+                         'cursor': 'pointer'}),
+        dcc.Download(id='download-data')
     ])
-    
-    # Tab 1: Statistics
-    with tab1:
-        st.header("Summary Statistics")
-        
-        numeric_cols = st.session_state.analyzer.df.select_dtypes(include=[np.number]).columns
-        
-        # Display statistics for each numeric column
-        for col in numeric_cols:
-            with st.expander(f"📊 {col.upper()}", expanded=True):
-                col1, col2, col3, col4, col5 = st.columns(5)
-                
-                with col1:
-                    st.metric("Mean", f"{st.session_state.analyzer.df[col].mean():.2f}")
-                with col2:
-                    st.metric("Median", f"{st.session_state.analyzer.df[col].median():.2f}")
-                with col3:
-                    st.metric("Std Dev", f"{st.session_state.analyzer.df[col].std():.2f}")
-                with col4:
-                    st.metric("Min", f"{st.session_state.analyzer.df[col].min():.2f}")
-                with col5:
-                    st.metric("Max", f"{st.session_state.analyzer.df[col].max():.2f}")
-    
-    # Tab 2: Visualizations
-    with tab2:
-        st.header("Data Visualizations")
-        
-        viz_option = st.selectbox(
-            "Choose visualization:",
-            [
-                "Temperature Trend",
-                "Monthly Averages",
-                "Correlation Heatmap",
-                "All Variables",
-                "Distribution Plots"
-            ]
-        )
-        
-        if viz_option == "Temperature Trend":
-            if 'temperature' in st.session_state.analyzer.df.columns:
-                st.subheader("🌡️ Temperature Trend Over Time")
-                fig, ax = plt.subplots(figsize=(12, 6))
-                ax.plot(
-                    st.session_state.analyzer.df['date'], 
-                    st.session_state.analyzer.df['temperature'], 
-                    linewidth=1.5, 
-                    color='#e74c3c'
-                )
-                ax.set_xlabel('Date', fontsize=12)
-                ax.set_ylabel('Temperature (°C)', fontsize=12)
-                ax.set_title('Temperature Trend Over Time', fontsize=16, fontweight='bold')
-                ax.grid(True, alpha=0.3)
-                plt.xticks(rotation=45)
-                st.pyplot(fig)
-            else:
-                st.warning("Temperature column not found in data")
-        
-        elif viz_option == "Monthly Averages":
-            if 'temperature' in st.session_state.analyzer.df.columns:
-                st.subheader("📅 Monthly Average Temperature")
-                
-                df_copy = st.session_state.analyzer.df.copy()
-                df_copy['month'] = pd.to_datetime(df_copy['date']).dt.month
-                monthly_avg = df_copy.groupby('month')['temperature'].mean()
-                
-                # Sort months in ascending order
-                monthly_avg = monthly_avg.sort_index()
-                
-                fig, ax = plt.subplots(figsize=(10, 6))
-                
-                months_present = monthly_avg.index.tolist()
-                month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-                labels_to_show = [month_labels[m-1] for m in months_present]
-                
-                ax.bar(months_present, monthly_avg, color='skyblue', edgecolor='navy', alpha=0.7)
-                ax.set_xlabel('Month', fontsize=12)
-                ax.set_ylabel('Average Temperature (°C)', fontsize=12)
-                ax.set_title('Monthly Average Temperature', fontsize=16, fontweight='bold')
-                ax.set_xticks(months_present)
-                ax.set_xticklabels(labels_to_show)
-                ax.grid(axis='y', alpha=0.3)
-                
-                # Add value labels on top of bars
-                for m, val in zip(months_present, monthly_avg):
-                    ax.text(m, val + 0.1, f"{val:.1f}", ha='center', va='bottom', fontsize=10)
-                
-                st.pyplot(fig)
-            else:
-                st.warning("Temperature column not found in data")
-
-        elif viz_option == "Correlation Heatmap":
-            st.subheader("🔥 Correlation Heatmap")
-            numeric_df = st.session_state.analyzer.df.select_dtypes(include=[np.number])
-            
-            fig, ax = plt.subplots(figsize=(10, 8))
-            sns.heatmap(
-                numeric_df.corr(), 
-                annot=True, 
-                fmt='.2f', 
-                cmap='coolwarm', 
-                center=0, 
-                square=True,
-                linewidths=1, 
-                cbar_kws={"shrink": 0.8},
-                ax=ax
-            )
-            ax.set_title('Weather Variables Correlation Heatmap', fontsize=16, fontweight='bold')
-            st.pyplot(fig)
-        
-        elif viz_option == "All Variables":
-            st.subheader("📊 All Weather Variables")
-
-            df = st.session_state.analyzer.df.copy()
-            
-            # Ensure 'date' is datetime
-            if 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'])
-            else:
-                st.warning("Date column not found in data.")
-                st.stop()
-            
-            # Select numeric columns safely
-            from pandas.api.types import is_numeric_dtype
-            numeric_cols = [col for col in df.columns if col != 'date' and is_numeric_dtype(df[col])]
-            
-            if not numeric_cols:
-                st.warning("No numeric columns found to plot.")
-            else:
-                n_cols = len(numeric_cols)
-                fig, axes = plt.subplots(n_cols, 1, figsize=(12, 4*n_cols))
-                
-                if n_cols == 1:
-                    axes = [axes]
-                
-                for idx, col in enumerate(numeric_cols):
-                    axes[idx].plot(df['date'], df[col], linewidth=1, color='royalblue')
-                    axes[idx].set_title(f'{col.title()} Over Time', fontsize=12, fontweight='bold')
-                    axes[idx].set_xlabel('Date', fontsize=10)
-                    axes[idx].set_ylabel(col.title(), fontsize=10)
-                    axes[idx].grid(True, alpha=0.3)
-                    axes[idx].tick_params(axis='x', rotation=45)
-                    
-                    if len(df) <= 60:  # small datasets
-                        for x, y in zip(df['date'], df[col]):
-                            axes[idx].text(x, y, f"{y:.1f}", fontsize=8, rotation=45)
-                
-                plt.tight_layout()
-                st.pyplot(fig)
 
 
-
-        elif viz_option == "Distribution Plots":
-            st.subheader("📊 Distribution of Weather Variables")
-            numeric_cols = st.session_state.analyzer.df.select_dtypes(include=[np.number]).columns
-            
-            selected_var = st.selectbox("Select variable:", numeric_cols)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.hist(
-                    st.session_state.analyzer.df[selected_var], 
-                    bins=30, 
-                    color='skyblue', 
-                    edgecolor='navy',
-                    alpha=0.7
-                )
-                ax.set_xlabel(selected_var.title())
-                ax.set_ylabel('Frequency')
-                ax.set_title(f'Distribution of {selected_var.title()}')
-                ax.grid(axis='y', alpha=0.3)
-                st.pyplot(fig)
-            
-            with col2:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.boxplot(st.session_state.analyzer.df[selected_var])
-                ax.set_ylabel(selected_var.title())
-                ax.set_title(f'Box Plot of {selected_var.title()}')
-                ax.grid(axis='y', alpha=0.3)
-                st.pyplot(fig)
-    
-    # Tab 3: Extremes
-    with tab3:
-        st.header("🌡️ Extreme Weather Days")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if 'temperature' in st.session_state.analyzer.df.columns:
-                st.subheader("🔥 Temperature Extremes")
-                hottest = st.session_state.analyzer.df.loc[
-                    st.session_state.analyzer.df['temperature'].idxmax()
-                ]
-                coldest = st.session_state.analyzer.df.loc[
-                    st.session_state.analyzer.df['temperature'].idxmin()
-                ]
-                
-                st.markdown(f"""
-                <div class="stat-card">
-                    <h3>Hottest Day</h3>
-                    <p><strong>Date:</strong> {hottest['date']}</p>
-                    <p><strong>Temperature:</strong> {hottest['temperature']:.2f}°C</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown(f"""
-                <div class="stat-card">
-                    <h3>Coldest Day</h3>
-                    <p><strong>Date:</strong> {coldest['date']}</p>
-                    <p><strong>Temperature:</strong> {coldest['temperature']:.2f}°C</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        with col2:
-            if 'precipitation' in st.session_state.analyzer.df.columns:
-                st.subheader("💧 Precipitation Extremes")
-                wettest = st.session_state.analyzer.df.loc[
-                    st.session_state.analyzer.df['precipitation'].idxmax()
-                ]
-                
-                st.markdown(f"""
-                <div class="stat-card">
-                    <h3>Wettest Day</h3>
-                    <p><strong>Date:</strong> {wettest['date']}</p>
-                    <p><strong>Precipitation:</strong> {wettest['precipitation']:.2f} mm</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            if 'wind_speed' in st.session_state.analyzer.df.columns:
-                windiest = st.session_state.analyzer.df.loc[
-                    st.session_state.analyzer.df['wind_speed'].idxmax()
-                ]
-                
-                st.markdown(f"""
-                <div class="stat-card">
-                    <h3>Windiest Day</h3>
-                    <p><strong>Date:</strong> {windiest['date']}</p>
-                    <p><strong>Wind Speed:</strong> {windiest['wind_speed']:.2f} km/h</p>
-                </div>
-                """, unsafe_allow_html=True)
-    
-    # Tab 4: Data View
-    with tab4:
-        st.header("📋 Raw Data View")
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            num_rows = st.slider("Number of rows to display", 5, 100, 10)
-        with col2:
-            sort_by = st.selectbox("Sort by", st.session_state.analyzer.df.columns)
-        
-        st.dataframe(
-            st.session_state.analyzer.df.sort_values(by=sort_by, ascending=False).head(num_rows),
-            use_container_width=True
-        )
-        
-        # Download button
-        csv = st.session_state.analyzer.df.to_csv(index=False)
-        st.download_button(
-            label="📥 Download Data as CSV",
-            data=csv,
-            file_name=f"weather_data_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-    
-    # Tab 5: Insights
-    with tab5:
-        st.header("🔍 Quick Insights")
-        
-        if 'temperature' in st.session_state.analyzer.df.columns:
-            avg_temp = st.session_state.analyzer.df['temperature'].mean()
-            temp_trend = "warming" if st.session_state.analyzer.df['temperature'].iloc[-30:].mean() > avg_temp else "cooling"
-            
-            st.info(f"📊 The average temperature is **{avg_temp:.2f}°C** and the recent trend shows {temp_trend}.")
-        
-        # if 'precipitation' in st.session_state.analyzer.df.columns:
-        #     rainy_days = len(st.session_state.analyzer.df[st.session_state.analyzer.df['precipitation'] > 0])
-        #     rainy_percentage = (rainy_days / len(st.session_state.analyzer.df)) * 100
-            
-        #     st.info(f"💧 There were **{rainy_days}** rainy days (**{rainy_percentage:.1f}%** of total days).")
-        
-        
-        # Seasonal analysis
-        if 'date' in st.session_state.analyzer.df.columns and 'temperature' in st.session_state.analyzer.df.columns:
-            st.subheader("🍂 Seasonal Temperature Analysis")
-            
-            df_seasonal = st.session_state.analyzer.df.copy()
-            df_seasonal['month'] = pd.to_datetime(df_seasonal['date']).dt.month
-            df_seasonal['season'] = df_seasonal['month'].apply(
-                lambda x: 'Winter' if x in [12, 1, 2] else
-                         'Spring' if x in [3, 4, 5] else
-                         'Summer' if x in [6, 7, 8] else 'Fall'
-            )
-            
-            seasonal_avg = df_seasonal.groupby('season')['temperature'].mean().sort_values(ascending=False)
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            for idx, (season, temp) in enumerate(seasonal_avg.items()):
-                with [col1, col2, col3, col4][idx]:
-                    st.metric(season, f"{temp:.1f}°C")
-
-# Footer
-st.markdown("---")
-st.markdown(
-    "<p style='text-align: center; color: #666;'>Weather Data Analyzer | Built with Streamlit 🌤️</p>",
-    unsafe_allow_html=True
+@app.callback(
+    Output('download-data', 'data'),
+    Input('download-btn', 'n_clicks'),
+    State('stored-data', 'data'),
+    prevent_initial_call=True
 )
+def download_csv(n_clicks, data):
+    if data is None:
+        return None
+    
+    df = pd.read_json(data, orient='split')
+    return dcc.send_data_frame(df.to_csv, f"weather_data_{datetime.now().strftime('%Y%m%d')}.csv", index=False)
+
+
+def render_insights(df):
+    insights = [html.H3("🔍 Quick Insights")]
+    
+    if 'temperature' in df.columns:
+        avg_temp = df['temperature'].mean()
+        recent_avg = df['temperature'].iloc[-30:].mean() if len(df) >= 30 else df['temperature'].mean()
+        temp_trend = "warming" if recent_avg > avg_temp else "cooling"
+        
+        insights.append(
+            html.Div(
+                f"📊 The average temperature is {avg_temp:.2f}°C and the recent trend shows {temp_trend}.",
+                style={'padding': '15px', 'backgroundColor': '#d1ecf1', 'borderRadius': '5px', 'margin': '10px 0'}
+            )
+        )
+    
+    if 'date' in df.columns and 'temperature' in df.columns:
+        insights.append(html.H4("🍂 Seasonal Temperature Analysis"))
+        
+        df_seasonal = df.copy()
+        df_seasonal['month'] = pd.to_datetime(df_seasonal['date']).dt.month
+        df_seasonal['season'] = df_seasonal['month'].apply(
+            lambda x: 'Winter' if x in [12, 1, 2] else
+                     'Spring' if x in [3, 4, 5] else
+                     'Summer' if x in [6, 7, 8] else 'Fall'
+        )
+        
+        seasonal_avg = df_seasonal.groupby('season')['temperature'].mean().sort_values(ascending=False)
+        
+        season_divs = []
+        for season, temp in seasonal_avg.items():
+            season_divs.append(
+                html.Div([
+                    html.H5(season),
+                    html.P(f"{temp:.1f}°C", style={'fontSize': '24px', 'fontWeight': 'bold'})
+                ], style={'display': 'inline-block', 'width': '23%', 'margin': '1%',
+                         'padding': '15px', 'backgroundColor': '#f0f2f6', 'borderRadius': '5px',
+                         'textAlign': 'center'})
+            )
+        
+        insights.append(html.Div(season_divs))
+    
+    return html.Div(insights)
+
+
+if __name__ == '__main__':
+    app.run( host='0.0.0.0', port=8050)
