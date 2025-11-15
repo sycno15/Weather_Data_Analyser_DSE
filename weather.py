@@ -181,7 +181,22 @@ class WeatherDataAnalyzer:
             "Chennai": (13.0827, 80.2707),
             "Bengaluru": (12.9716, 77.5946),
             "Kolkata": (22.5726, 88.3639),
-            "Hyderabad": (17.3850, 78.4867)
+            "Hyderabad": (17.3850, 78.4867),
+            'mumbai': (19.0760, 72.8777),
+            'Pune': (18.5204, 73.8567),
+            'Ahmedabad': (23.0225, 72.5714),
+            'New York': (40.7128, -74.0060),
+            'London': (51.5074, -0.1278),
+            'Tokyo': (35.6762, 139.6503),
+            'Paris': (48.8566, 2.3522),
+            'Sydney': (-33.8688, 151.2093),
+            'Dubai': (25.2048, 55.2708),
+            'Singapore': (1.3521, 103.8198),
+            'Los Angeles': (34.0522, -118.2437),
+            'San Francisco': (37.7749, -122.4194),
+            'Chicago': (41.8781, -87.6298),
+            'Boston': (42.3601, -71.0589),
+            'Seattle': (47.6062, -122.3321)
         }
 
         if city not in city_coords:
@@ -207,7 +222,7 @@ class WeatherDataAnalyzer:
             'wspd': 'wind_speed',
             'pres': 'pressure'
         })[['date', 'temperature', 'precipitation', 'wind_speed', 'pressure']].dropna()
-
+        df['pressure'] = df['pressure'] / 10
         self.df = df
         print(f"✅ Loaded {len(df)} days of data for {city} (last {days} days)")
         return df
